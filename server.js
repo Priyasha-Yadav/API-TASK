@@ -279,20 +279,33 @@ app.post('/instagram/posts/:postid/comments', async (req, res) => {
     }
 });
     //PATCH /comments/:id: Update a comment.
-
     app.patch('/instagram/posts/:postid/comments/:commentid', async (req, res) => {
         try {
-            const post = await posts.findOne({ postId: (req.params.postid) });
-            if (!post) {
-           return res.status(200).json({ message: 'Comment updated successfully' });
-        } 
-    }
-        catch (error) {
+            const { action } = req.body;  
+            const { postid, commentid } = req.params;  
+            
+            const comment = await comments.findOne({ postId: postid, commentId: commentid });
+    
+            if (!comment) {
+                return res.status(404).json({ error: 'Post or Comment not found' });
+            }
+    
+            if (action === 'like') {
+                await comments.updateOne(
+                    { postId: postid, commentId: commentid },
+                    { $inc: { likes: 1 } }
+                );
+                return res.status(200).json({ message: 'Comment liked successfully' });
+            } else {
+                return res.status(200).json({ message: 'Comment updated successfully' });
+            }
+        } catch (error) {
             console.error('Error updating comment', error);
             res.status(500).json({ error: 'Error updating comment' });
         }
-    });
-
+    });    
+    
+    
     //DELETE /comments/:id: Delete a comment.
 app.delete('/instagram/posts/:postid/comments/:commentid', async (req, res) => {
     try {
@@ -306,8 +319,9 @@ app.delete('/instagram/posts/:postid/comments/:commentid', async (req, res) => {
 });
 
 //Folllowers
+
 //GET /followers/:id: Fetch all followers of a user.
-app.get('/instagram/followers/:userid', async (req, res) => {
+app.get('/instagram/:userid/followers', async (req, res) => {
     try{
         const allFollowers = await followers.find().toArray();
         res.status(200).json(allFollowers);
@@ -318,43 +332,61 @@ app.get('/instagram/followers/:userid', async (req, res) => {
     }
 
 });
+
 //POST /followers/:id: Add a follower to a user.
-app.post('/instagram/followers/:userid', async (req, res) => {
-    try{
-        const { userId, followerId } = req.body;
-        const user = await users.findOne({ userId });
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
+app.post('/instagram/:userid/followers', async (req, res) => {
+    app.post('/instagram/follow', async (req, res) => {
+        try {
+            const { followerId, userId } = req.body;
+    
+            // Step 1: Check if the user to be followed exists
+            const user = await users.findOne({ userId });
+            if (!user) {
+                return res.status(404).json({ error: 'User to be followed not found' });
+            }
+    
+            // Step 2: Check if the follower exists
+            const follower = await users.findOne({ userId: followerId });
+            if (!follower) {
+                return res.status(404).json({ error: 'Follower user not found' });
+            }
+    
+            // Step 3: Check if the follower already follows the user
+            const existingFollower = await followers.findOne({ userId, followerId });
+            if (existingFollower) {
+                return res.status(400).json({ error: 'Follower already exists' });
+            }
+    
+            // Step 4: Create the new follow relationship
+            const newFollow = {
+                followerId,        // The ID of the user following
+                userId,            // The ID of the user being followed
+                followingId: userId, // The ID of the user being followed (optional in your case)
+                followedAt: new Date() // Timestamp when the follow happened
+            };
+    
+            // Insert the follow relationship into the database
+            await followers.insertOne(newFollow);
+    
+            // Step 5: Respond with a success message
+            res.status(201).json({ message: 'Followed successfully' });
+    
+        } catch (error) {
+            console.error('Error adding follow', error);
+            res.status(500).json({ error: 'Error adding follow' });
         }
-        const follower = await users.findOne({ userId: followerId });
-        if (!follower) {
-            return res.status(404).json({ error: 'Follower not found' });
-        }
-        const existingFollower = await followers.findOne({ userId, followerId });
-        if (existingFollower) {
-            return res.status(400).json({ error: 'Follower already exists' });
-        }
-        const newFollower = {
-            userId,
-            followerId,
-            username: user.username,
-            fullName: user.fullName,
-            followerUsername: follower.username,
-            followerFullName: follower.fullName,
-            followedAt: new Date()
-        };
-        await followers.insertOne(newFollower);
-        res.status(201).json({ message: 'Follower added successfully' });
-    }
-    catch(error){   
-        console.error('Error adding follower', error);
-        res.status(500).json({ error: 'Error adding follower' });
-    }
+    });
+    
 });
+
+    
+
+
 //DELETE /followers/:id: Remove a follower from a user.
-app.delete('/instagram/followers/:userid', async (req, res) => {
+
+app.delete('/instagram/:userid/followers/:followerId', async (req, res) => {
     try {
-        const deletedFollower = await followers.deleteOne({ userId: (req.params.userid) });
+        const deletedFollower = await followers.deleteOne({ userId: (req.params.userid) }, { followerId: (req.params.followerId) });
         if (deletedFollower.deletedCount === 0) {
             return res.status(404).json({ error: 'Follower not found' });
         }
@@ -369,51 +401,59 @@ app.delete('/instagram/followers/:userid', async (req, res) => {
 // Stories
 //GET /stories
 app.get('/instagram/stories', async (req, res) => {
-    try{
-        const allStories = await stories.find().toArray();
+    try {
+        const allStories = await stories.find({
+            expiresAt: { $gte: new Date() }  
+        }).toArray();
+
         res.status(200).json(allStories);
-    }
-    catch(error){
+    } catch (error) {
         console.error('Error fetching stories', error);
         res.status(500).json({ error: 'Error fetching stories' });
     }
 });
+
 //POST /stories
 app.post('/instagram/stories', async (req, res) => {
-    const { userId, storyURL, hashtags, location } = req.body;
-    try{
+    const { userId, imageURL, caption } = req.body;
+
+    try {
         const user = await users.findOne({ userId });
         if (!user) {
             return res.status(404).json({ error: 'User not found' });
         }
+
+        const views = 0;
         const storyCount = await stories.countDocuments();
-        const storyId = storyCount + 1;
+        const storyId = `s00${storyCount + 1}`;
+
         const story = {
-            userId,
-            storyId: `s00${storyId}`,
+            userId: user.userId,
+            storyId,
             username: user.username,
-            fullName: user.fullName,
-            storyURL,
-            hashtags: hashtags || [],
-            location: location || null,
-            createdAt: new Date()
+            imageURL,
+            caption,
+            views,
+            createdAt: new Date(),
+            expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000)
         };
+
         const storyResult = await stories.insertOne(story);
-        res.status(201).json({ message: 'Story created successfully', storyId: storyResult.insertedId });
-    }
-    catch(error){
+
+        res.status(201).json({ message: 'Story created successfully', storyId: storyResult.insertedId.toString() });
+    } catch (error) {
         console.error('Error creating story', error);
         res.status(500).json({ error: 'Error creating story' });
     }
 });
+
 //DELETE /stories/:id
 app.delete('/instagram/stories/:storyid', async (req, res) => {
     try{
         const deletedStory = await stories.deleteOne({ storyId: (req.params.storyid) });
-        if (deletedStory.deletedCount === 0) {
-            return res.status(404).json({ error: 'Story not found' });
+        if (deletedStory) {
+            return res.status(200).json({ message: 'Story deleted successfully' });
         }
-        res.status(200).json({ message: 'Story deleted successfully' });
     }
     catch{
         console.error('Error deleting story', error);
